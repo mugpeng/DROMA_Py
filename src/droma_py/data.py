@@ -23,13 +23,139 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
+def _get_filtered_samples_optimized(
+    cursor: sqlite3.Cursor,
+    data_type: Union[str, List[str]],
+    tumor_type: Union[str, List[str]],
+    max_samples: Optional[int] = None
+) -> Optional[List[str]]:
+    """
+    Efficiently get filtered sample IDs with size limits.
+    
+    Returns None if no filtering needed, empty list if no matches found.
+    """
+    if data_type == "all" and tumor_type == "all":
+        return None
+    
+    # Check if sample_anno table exists
+    cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sample_anno'")
+    if cursor.fetchone()[0] == 0:
+        logger.warning("sample_anno table not found. Skipping sample filtering.")
+        return None
+    
+    # Build optimized query with early termination
+    sample_query = "SELECT SampleID FROM sample_anno WHERE 1=1"
+    params = []
+    
+    if data_type != "all":
+        if isinstance(data_type, str):
+            data_type_list = [data_type]
+        else:
+            data_type_list = data_type
+        
+        placeholders = ", ".join(["?" for _ in data_type_list])
+        sample_query += f" AND DataType IN ({placeholders})"
+        params.extend(data_type_list)
+    
+    if tumor_type != "all":
+        if isinstance(tumor_type, str):
+            tumor_type_list = [tumor_type]
+        else:
+            tumor_type_list = tumor_type
+        
+        placeholders = ", ".join(["?" for _ in tumor_type_list])
+        sample_query += f" AND TumorType IN ({placeholders})"
+        params.extend(tumor_type_list)
+    
+    # Add limit for performance
+    if max_samples:
+        sample_query += f" LIMIT {max_samples}"
+    
+    try:
+        cursor.execute(sample_query, params)
+        filtered_samples = [row[0] for row in cursor.fetchall()]
+        
+        if not filtered_samples:
+            logger.warning(f"No samples match the specified criteria: data_type={data_type}, tumor_type={tumor_type}")
+        else:
+            logger.info(f"Found {len(filtered_samples)} samples matching filter criteria")
+        
+        return filtered_samples
+        
+    except sqlite3.Error as e:
+        logger.warning(f"Could not filter samples: {e}")
+        return None
+
+
+def _build_optimized_query(
+    table: str,
+    select_feas_type: str,
+    select_feas: Union[str, List[str]],
+    filtered_samples: Optional[List[str]] = None,
+    max_features: Optional[int] = None
+) -> tuple:
+    """
+    Build optimized SQL query with column filtering and limits.
+    
+    Returns (query, params) tuple.
+    """
+    params = []
+    
+    # For continuous data types
+    if select_feas_type in ["mRNA", "cnv", "meth", "proteinrppa", "proteinms", "drug", "drug_raw"]:
+        if select_feas == "all":
+            if filtered_samples:
+                # Only select filtered sample columns plus feature_id
+                sample_cols = ', '.join([f'`{sample}`' for sample in filtered_samples])
+                query = f"SELECT feature_id, {sample_cols} FROM {table}"
+            else:
+                query = f"SELECT * FROM {table}"
+            
+            # Add feature limit for performance
+            if max_features:
+                query += f" LIMIT {max_features}"
+        else:
+            # Handle specific features
+            if isinstance(select_feas, str):
+                select_feas_list = [select_feas]
+            else:
+                select_feas_list = select_feas
+            
+            if filtered_samples:
+                sample_cols = ', '.join([f'`{sample}`' for sample in filtered_samples])
+                query = f"SELECT feature_id, {sample_cols} FROM {table} WHERE feature_id IN ({', '.join(['?' for _ in select_feas_list])})"
+            else:
+                query = f"SELECT * FROM {table} WHERE feature_id IN ({', '.join(['?' for _ in select_feas_list])})"
+            
+            params.extend(select_feas_list)
+    
+    else:
+        # For discrete data types
+        if select_feas == "all":
+            query = f"SELECT * FROM {table}"
+            if max_features:
+                query += f" LIMIT {max_features}"
+        else:
+            if isinstance(select_feas, str):
+                select_feas_list = [select_feas]
+            else:
+                select_feas_list = select_feas
+            
+            query = f"SELECT gene, cells FROM {table} WHERE gene IN ({', '.join(['?' for _ in select_feas_list])})"
+            params.extend(select_feas_list)
+    
+    return query, params
+
+
 def get_feature_from_database(
     select_feas_type: str,
     select_feas: Union[str, List[str]] = "all",
     data_sources: Union[str, List[str]] = "all",
     data_type: Union[str, List[str]] = "all",
     tumor_type: Union[str, List[str]] = "all",
-    connection: Optional[sqlite3.Connection] = None
+    connection: Optional[sqlite3.Connection] = None,
+    max_features: Optional[int] = None,
+    max_samples: Optional[int] = None
 ) -> Dict[str, Union[pd.DataFrame, pd.Series, List[str]]]:
     """
     Retrieve specific feature data from the DROMA database based on selection criteria.
@@ -47,6 +173,8 @@ def get_feature_from_database(
         tumor_type: Filter by tumor type(s). Can be a single type, list of types, or "all"
                    ("all" or specific tumor types like "breast", "lung", etc.)
         connection: Optional database connection. If None, uses global connection
+        max_features: Maximum number of features to retrieve when select_feas="all" (default: None)
+        max_samples: Maximum number of samples to retrieve (default: None)
         
     Returns:
         Dict[str, Union[pd.DataFrame, pd.Series, List[str]]]: Selected features from specified data sources
@@ -99,51 +227,13 @@ def get_feature_from_database(
     if not feature_tables:
         raise DROMADataError("No matching tables found for the specified data sources")
     
-    # Get sample IDs from sample_anno based on data_type and tumor_type
-    filtered_samples = None
-    if data_type != "all" or tumor_type != "all":
-        sample_query = "SELECT SampleID FROM sample_anno WHERE 1=1"
-        params = []
-        
-        if data_type != "all":
-            # Handle both single string and list of strings
-            if isinstance(data_type, str):
-                data_type_list = [data_type]
-            else:
-                data_type_list = data_type
-            
-            # Create IN clause for multiple data types
-            placeholders = ", ".join(["?" for _ in data_type_list])
-            sample_query += f" AND DataType IN ({placeholders})"
-            params.extend(data_type_list)
-        
-        if tumor_type != "all":
-            # Handle both single string and list of strings
-            if isinstance(tumor_type, str):
-                tumor_type_list = [tumor_type]
-            else:
-                tumor_type_list = tumor_type
-            
-            # Create IN clause for multiple tumor types
-            placeholders = ", ".join(["?" for _ in tumor_type_list])
-            sample_query += f" AND TumorType IN ({placeholders})"
-            params.extend(tumor_type_list)
-        
-        try:
-            if params:
-                cursor.execute(sample_query, params)
-            else:
-                cursor.execute(sample_query)
-            
-            filtered_samples = [row[0] for row in cursor.fetchall()]
-            
-            if not filtered_samples:
-                raise DROMADataError(
-                    f"No samples match the specified data_type='{data_type}' and tumor_type='{tumor_type}' criteria"
-                )
-        except sqlite3.Error as e:
-            logger.warning(f"Could not filter samples: {e}")
-            filtered_samples = None
+    # Get filtered samples using optimized helper function
+    filtered_samples = _get_filtered_samples_optimized(cursor, data_type, tumor_type, max_samples)
+    
+    if filtered_samples is not None and not filtered_samples:
+        raise DROMADataError(
+            f"No samples match the specified data_type='{data_type}' and tumor_type='{tumor_type}' criteria"
+        )
     
     # Retrieve data for each table
     result_dict = {}
@@ -153,125 +243,88 @@ def get_feature_from_database(
         data_source = re.sub(f"_{select_feas_type}$", "", table)
         
         try:
-            # Query for the specified feature or entire table
+            # Build optimized query using helper function
+            query, params = _build_optimized_query(
+                table, select_feas_type, select_feas, filtered_samples, max_features
+            )
+            
+            # Execute optimized query
             if select_feas_type in ["mRNA", "cnv", "meth", "proteinrppa", "proteinms", "drug", "drug_raw"]:
-                # For continuous data
-                if select_feas == "all":
-                    # Get entire table
-                    query = f"SELECT * FROM {table}"
-                    feature_data = pd.read_sql_query(query, connection)
-                    
-                    if feature_data.empty:
-                        continue  # Skip if table is empty
-                    
-                    # Convert to matrix format (set index to feature_id if exists)
-                    if 'feature_id' in feature_data.columns:
-                        feature_data = feature_data.set_index('feature_id')
-                    
+                # For continuous data - use pandas for efficient matrix operations
+                feature_data = pd.read_sql_query(query, connection, params=params if params else None)
+                
+                if feature_data.empty:
+                    continue  # Skip if no data found
+                
+                # Set index to feature_id if present
+                if 'feature_id' in feature_data.columns:
+                    feature_data = feature_data.set_index('feature_id')
+                
+                # Return appropriate format based on data shape
+                if isinstance(select_feas, str) and select_feas != "all" and len(feature_data) == 1:
+                    # Single feature - return as Series
+                    feature_result = feature_data.iloc[0]
+                else:
+                    # Multiple features or all features - return as DataFrame
                     feature_result = feature_data
-                    
-                else:
-                    # Handle both single feature and multiple features
-                    if isinstance(select_feas, str):
-                        select_feas_list = [select_feas]
-                    else:
-                        select_feas_list = select_feas
-                    
-                    # Get rows for the specified features using IN clause
-                    placeholders = ", ".join(["?" for _ in select_feas_list])
-                    query = f"SELECT * FROM {table} WHERE feature_id IN ({placeholders})"
-                    feature_data = pd.read_sql_query(query, connection, params=select_feas_list)
-                    
-                    if feature_data.empty:
-                        continue  # Skip if features not found
-                    
-                    # Convert to appropriate format
-                    if 'feature_id' in feature_data.columns:
-                        feature_data = feature_data.set_index('feature_id')
-                    
-                    # Return DataFrame for multiple features, Series for single feature
-                    if len(select_feas_list) == 1 and len(feature_data) == 1:
-                        # Single feature - return as Series
-                        feature_result = feature_data.iloc[0]
-                    else:
-                        # Multiple features - return as DataFrame
-                        feature_result = feature_data
-                    
+            
             else:
-                # For discrete data like mutations
-                if select_feas == "all":
-                    # Get entire table
-                    query = f"SELECT * FROM {table}"
-                    feature_result = pd.read_sql_query(query, connection)
-                    
-                    if feature_result.empty:
-                        continue  # Skip if table is empty
-                        
-                else:
-                    # Handle both single feature and multiple features
+                # For discrete data - handle manually for sample filtering
+                cursor.execute(query, params if params else [])
+                results = cursor.fetchall()
+                
+                if not results:
+                    continue  # Skip if no features found
+                
+                if select_feas != "all":
                     if isinstance(select_feas, str):
                         select_feas_list = [select_feas]
                     else:
                         select_feas_list = select_feas
-                    
-                    # Get data for the specified features using IN clause
-                    placeholders = ", ".join(["?" for _ in select_feas_list])
-                    query = f"SELECT gene, cells FROM {table} WHERE gene IN ({placeholders})"
-                    cursor.execute(query, select_feas_list)
-                    results = cursor.fetchall()
-                    
-                    if not results:
-                        continue  # Skip if features not found
                     
                     if len(select_feas_list) == 1:
                         # Single feature - return list of sample IDs
                         feature_result = [row[1] for row in results]
+                        # Apply sample filtering if needed
+                        if filtered_samples is not None:
+                            feature_result = list(set(feature_result) & set(filtered_samples))
+                            if not feature_result:
+                                continue
                     else:
-                        # Multiple features - return dictionary with gene as key
+                        # Multiple features - return dictionary
                         feature_result = {}
                         for gene, cells in results:
                             if gene not in feature_result:
                                 feature_result[gene] = []
                             feature_result[gene].append(cells)
-            
-            # Filter by samples if needed
-            if filtered_samples is not None:
-                if select_feas_type in ["mRNA", "cnv", "meth", "proteinrppa", "proteinms", "drug", "drug_raw"]:
-                    if isinstance(feature_result, pd.DataFrame):
-                        # For full tables, filter columns
-                        common_samples = list(set(feature_result.columns) & set(filtered_samples))
-                        if not common_samples:
-                            continue  # Skip if no samples match the filter
-                        feature_result = feature_result[common_samples]
-                    elif isinstance(feature_result, pd.Series):
-                        # For single features, filter index
-                        common_samples = list(set(feature_result.index) & set(filtered_samples))
-                        if not common_samples:
-                            continue  # Skip if no samples match the filter
-                        feature_result = feature_result[common_samples]
+                        
+                        # Apply sample filtering if needed
+                        if filtered_samples is not None:
+                            filtered_dict = {}
+                            for gene, samples in feature_result.items():
+                                filtered_gene_samples = list(set(samples) & set(filtered_samples))
+                                if filtered_gene_samples:
+                                    filtered_dict[gene] = filtered_gene_samples
+                            feature_result = filtered_dict
+                            if not feature_result:
+                                continue
                 else:
-                    # For discrete data, handle different return formats
-                    if isinstance(feature_result, list):
-                        # Single feature - filter the list
-                        feature_result = list(set(feature_result) & set(filtered_samples))
-                        if not feature_result:
-                            continue  # Skip if no samples match the filter
-                    elif isinstance(feature_result, dict):
-                        # Multiple features - filter each gene's sample list
-                        filtered_dict = {}
-                        for gene, samples in feature_result.items():
-                            filtered_gene_samples = list(set(samples) & set(filtered_samples))
-                            if filtered_gene_samples:
-                                filtered_dict[gene] = filtered_gene_samples
-                        feature_result = filtered_dict
-                        if not feature_result:
-                            continue  # Skip if no samples match the filter
+                    # All features - return as DataFrame
+                    feature_result = pd.DataFrame(results, columns=['gene', 'cells'])
+                    # Apply sample filtering if needed
+                    if filtered_samples is not None:
+                        feature_result = feature_result[feature_result['cells'].isin(filtered_samples)]
+                        if feature_result.empty:
+                            continue
             
             # Add to result dictionary
             result_dict[data_source] = feature_result
             
         except sqlite3.Error as e:
             logger.warning(f"Error querying table {table}: {e}")
+            continue
+        except pd.io.sql.DatabaseError as e:
+            logger.warning(f"Database error querying table {table}: {e}")
             continue
     
     if not result_dict:
