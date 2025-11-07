@@ -104,12 +104,8 @@ def _build_optimized_query(
     # For continuous data types
     if select_feas_type in ["mRNA", "cnv", "meth", "proteinrppa", "proteinms", "drug", "drug_raw"]:
         if select_feas == "all":
-            if filtered_samples:
-                # Only select filtered sample columns plus feature_id
-                sample_cols = ', '.join([f'`{sample}`' for sample in filtered_samples])
-                query = f"SELECT feature_id, {sample_cols} FROM {table}"
-            else:
-                query = f"SELECT * FROM {table}"
+            # Always select all columns, filter in Python later
+            query = f"SELECT * FROM {table}"
             
             # Add feature limit for performance
             if max_features:
@@ -121,11 +117,8 @@ def _build_optimized_query(
             else:
                 select_feas_list = select_feas
             
-            if filtered_samples:
-                sample_cols = ', '.join([f'`{sample}`' for sample in filtered_samples])
-                query = f"SELECT feature_id, {sample_cols} FROM {table} WHERE feature_id IN ({', '.join(['?' for _ in select_feas_list])})"
-            else:
-                query = f"SELECT * FROM {table} WHERE feature_id IN ({', '.join(['?' for _ in select_feas_list])})"
+            # Always select all columns, filter in Python later
+            query = f"SELECT * FROM {table} WHERE feature_id IN ({', '.join(['?' for _ in select_feas_list])})"
             
             params.extend(select_feas_list)
     
@@ -259,6 +252,14 @@ def get_feature_from_database(
                 # Set index to feature_id if present
                 if 'feature_id' in feature_data.columns:
                     feature_data = feature_data.set_index('feature_id')
+                
+                # Filter by samples if needed
+                if filtered_samples is not None:
+                    # Find common samples between data columns and filtered_samples
+                    common_samples = [col for col in feature_data.columns if col in filtered_samples]
+                    if not common_samples:
+                        continue  # Skip if no samples match the filter
+                    feature_data = feature_data[common_samples]
                 
                 # Return appropriate format based on data shape
                 if isinstance(select_feas, str) and select_feas != "all" and len(feature_data) == 1:
