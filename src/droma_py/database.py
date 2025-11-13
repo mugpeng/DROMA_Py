@@ -6,10 +6,9 @@ connecting to and managing DROMA SQLite databases.
 """
 
 import sqlite3
-import os
 import atexit
 from pathlib import Path
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, List
 import logging
 
 from .exceptions import DROMAConnectionError, DROMAError
@@ -150,12 +149,12 @@ class DROMADatabase:
         cursor = self.execute(query, params)
         return cursor.fetchone()
     
-    def list_tables(self) -> list[str]:
+    def list_tables(self) -> List[str]:
         """
         List all tables in the database.
         
         Returns:
-            list[str]: List of table names
+            List[str]: List of table names
         """
         query = "SELECT name FROM sqlite_master WHERE type='table'"
         results = self.fetchall(query)
@@ -176,7 +175,7 @@ class DROMADatabase:
 
 
 def connect_droma_database(
-    db_path: Union[str, Path] = None,
+    db_path: Optional[Union[str, Path]] = None,
     set_global: bool = True
 ) -> sqlite3.Connection:
     """

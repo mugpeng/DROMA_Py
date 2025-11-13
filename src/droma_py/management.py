@@ -512,13 +512,13 @@ def update_droma_annotation(
     anno_type: str,
     name_mapping: pd.DataFrame,
     project_name: str,
-    data_type: Union[str, List[str]] = None,
-    tumor_type: Union[str, List[str]] = None,
-    patient_id: Union[str, List[str]] = None,
-    gender: Union[str, List[str]] = None,
-    age: Union[int, float, List[Union[int, float]]] = None,
-    full_ethnicity: Union[str, List[str]] = None,
-    simple_ethnicity: Union[str, List[str]] = None,
+    data_type: Optional[Union[str, List[str]]] = None,
+    tumor_type: Optional[Union[str, List[str]]] = None,
+    patient_id: Optional[Union[str, List[str]]] = None,
+    gender: Optional[Union[str, List[str]]] = None,
+    age: Optional[Union[int, float, List[Union[int, float]]]] = None,
+    full_ethnicity: Optional[Union[str, List[str]]] = None,
+    simple_ethnicity: Optional[Union[str, List[str]]] = None,
     connection: Optional[sqlite3.Connection] = None
 ) -> bool:
     """

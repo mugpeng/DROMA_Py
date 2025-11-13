@@ -93,3 +93,4 @@ dmypy.json
 *.sqlite
 *.db
 /Archive
+/examples
