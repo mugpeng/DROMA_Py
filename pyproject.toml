@@ -54,8 +54,8 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://droma01.github.io/"
-Documentation = "https://droma01.github.io/"
+Homepage = "https://droma01.github.io/DROMA/"
+Documentation = "https://droma01.github.io/DROMA/"
 Repository = "https://github.com/droma01/droma"
 Issues = "https://github.com/droma01/droma/issues"
 Changelog = "https://github.com/droma01/droma/blob/main/CHANGELOG.md"

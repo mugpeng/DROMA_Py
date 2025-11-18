@@ -1,6 +1,6 @@
 # DROMA-Py
 
-[![Website](https://img.shields.io/badge/🌐_Website-droma01.github.io-blue)](https://droma01.github.io/)
+[![Website](https://img.shields.io/badge/🌐_Website-droma01.github.io/DROMA-blue)](https://droma01.github.io/DROMA/)
 [![License](https://img.shields.io/badge/License-MPL--2.0-blue.svg)](https://opensource.org/licenses/MPL-2.0)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![DOI](https://img.shields.io/badge/DOI-10.1101%2F2024.15742800-blue)](https://doi.org/10.1101/2024.15742800)
@@ -307,7 +307,7 @@ This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE
 
 ## 📞 Support
 
-- **Website**: [https://droma01.github.io/](https://droma01.github.io/)
+- **Website**: [https://droma01.github.io/DROMA/](https://droma01.github.io/DROMA/)
 - **Issues**: [GitHub Issues](https://github.com/droma01/droma/issues)
 - **Email**: contact@droma.io
 

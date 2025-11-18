@@ -763,16 +763,23 @@ def get_droma_annotation(
     limit: Optional[int] = None
 ) -> pd.DataFrame:
     """
-    Retrieve annotation data from either sample_anno or drug_anno tables.
+    Retrieve annotation data from sample_anno, drug_anno, or drug_structure tables.
     
     Args:
-        anno_type: Type of annotation to retrieve ("sample" or "drug")
-        project_name: Optional project name to filter results (default: None for all projects)
-        ids: Optional specific IDs to retrieve (SampleID for samples, DrugName for drugs)
-        data_type: For sample annotations only: filter by data type ("all", "CellLine", "PDO", "PDC", "PDX")
-        tumor_type: For sample annotations only: filter by tumor type ("all" or specific type)
+        anno_type: Type of annotation to retrieve ("sample", "drug", or "structure").
+                   When set to "structure", the entire drug_structure table is returned
+                   without applying any filters.
+        project_name: Optional project name to filter results (default: None for all projects).
+                      Not used when anno_type="structure".
+        ids: Optional specific IDs to retrieve (SampleID for samples, DrugName for drugs).
+             Not used when anno_type="structure".
+        data_type: For sample annotations only: filter by data type ("all", "CellLine", "PDO", "PDC", "PDX").
+                   Not used when anno_type="structure".
+        tumor_type: For sample annotations only: filter by tumor type ("all" or specific type).
+                    Not used when anno_type="structure".
         connection: Optional database connection. If None, uses global connection
-        limit: Maximum number of records to return (default: None for all records)
+        limit: Maximum number of records to return (default: None for all records).
+               Not used when anno_type="structure".
         
     Returns:
         pd.DataFrame: Annotation data
@@ -789,15 +796,49 @@ def get_droma_annotation(
         
         >>> # Get all drug annotations
         >>> drug_anno = get_droma_annotation("drug")
+        
+        >>> # Get drug structure data
+        >>> drug_structure = get_droma_annotation("structure")
     """
     if connection is None:
         connection = get_global_connection()
     
     # Validate anno_type
-    if anno_type not in ["sample", "drug"]:
-        raise DROMAValidationError("anno_type must be either 'sample' or 'drug'")
+    if anno_type not in ["sample", "drug", "structure"]:
+        raise DROMAValidationError("anno_type must be either 'sample', 'drug', or 'structure'")
     
-    # Determine table name and ID column
+    cursor = connection.cursor()
+    
+    # Check if table exists
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    all_tables = [row[0] for row in cursor.fetchall()]
+    
+    # Handle structure type separately - no filters applied
+    if anno_type == "structure":
+        table_name = "drug_structure"
+        if table_name not in all_tables:
+            raise DROMATableError(
+                f"Table 'drug_structure' not found in database. "
+                f"Please update to the latest DROMA database from: "
+                f"https://zenodo.org/records/17498421"
+            )
+        
+        # Warn if filters are provided (they will be ignored)
+        if project_name is not None or ids is not None or data_type != "all" or tumor_type != "all":
+            logger.warning(
+                "Filter parameters (project_name, ids, data_type, tumor_type) are ignored "
+                "when anno_type='structure'. Returning entire drug_structure table."
+            )
+        
+        # Return entire table without filters
+        try:
+            result = pd.read_sql_query(f"SELECT * FROM {table_name}", connection)
+            logger.info(f"Retrieved {len(result)} structure records from {table_name}")
+            return result
+        except sqlite3.Error as e:
+            raise DROMAQueryError(f"Error querying {anno_type} annotations", str(e))
+    
+    # Determine table name and ID column for sample and drug types
     if anno_type == "sample":
         table_name = "sample_anno"
         id_column = "SampleID"
@@ -806,12 +847,6 @@ def get_droma_annotation(
         table_name = "drug_anno"
         id_column = "DrugName"
         project_column = "ProjectID"
-    
-    cursor = connection.cursor()
-    
-    # Check if table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    all_tables = [row[0] for row in cursor.fetchall()]
     
     if table_name not in all_tables:
         raise DROMATableError(f"Annotation table '{table_name}' not found in database")
