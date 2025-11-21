@@ -41,6 +41,13 @@ from .harmonization import (
     check_droma_drug_names,
 )
 
+# SQLite matrix storage and retrieval
+from .extract_sql import (
+    store_matrices_in_database,
+    retrieve_matrix_from_database,
+    list_matrix_tables,
+)
+
 # Exceptions
 from .exceptions import (
     DROMAError,
@@ -71,6 +78,10 @@ __all__ = [
     # Name harmonization
     "check_droma_sample_names",
     "check_droma_drug_names",
+    # SQLite matrix storage and retrieval
+    "store_matrices_in_database",
+    "retrieve_matrix_from_database",
+    "list_matrix_tables",
     # Exceptions
     "DROMAError",
     "DROMAConnectionError",
